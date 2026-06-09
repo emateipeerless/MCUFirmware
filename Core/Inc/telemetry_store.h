@@ -22,4 +22,7 @@ bool Telemetry_TakeSlow(char *dst, size_t dst_len, uint32_t *seq_out);
 void Telemetry_AckFast(uint32_t seq);
 void Telemetry_AckSlow(uint32_t seq);
 
+bool Telemetry_HasPendingFast(void);
+bool Telemetry_HasPendingSlow(void);
+
 #endif

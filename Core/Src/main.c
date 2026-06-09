@@ -53,6 +53,7 @@
 #define MB_SLOW_MS               600000U
 #define MB_START_MS              20000U
 #define CELL_PRINT_MS            1000U
+#define CELL_SLOW_RETRY_MS       60000U
 
 /* USER CODE END PD */
 
@@ -114,6 +115,7 @@ static const ModbusRtuPollReg_t fcjc_rtu_regs[] =
 static char s_mb_json_buf[TELEMETRY_JSON_MAX];
 static char s_cell_json_buf[TELEMETRY_JSON_MAX];
 static uint16_t s_rtu_block[MB_RTU_BLOCK_COUNT];
+static uint32_t s_next_slow_at = 0U;
 
 /* USER CODE END PV */
 
@@ -338,6 +340,11 @@ static void Mb_BuildAndPublishSlow(void)
     }
 
     Telemetry_PublishSlow(buf);
+}
+
+void ArmSlowPollAfterSend(void)
+{
+    s_next_slow_at = HAL_GetTick() + MB_SLOW_MS;
 }
 
 /* USER CODE END 0 */
@@ -738,7 +745,6 @@ void StartModbus(void const * argument)
 {
   /* USER CODE BEGIN StartModbus */
   uint32_t next_fast_at = 0U;
-  uint32_t next_slow_at = 0U;
 
   (void)argument;
 
@@ -775,14 +781,20 @@ void StartModbus(void const * argument)
       next_fast_at = HAL_GetTick() + MB_FAST_MS;
     }
 
-    if (next_slow_at == 0U)
+    if (s_next_slow_at == 0U)
     {
-      next_slow_at = now + MB_SLOW_MS;
+      s_next_slow_at = HAL_GetTick() + MB_SLOW_MS;
     }
-    else if ((int32_t)(now - next_slow_at) >= 0)
+    else if ((int32_t)(now - s_next_slow_at) >= 0)
     {
-      Mb_BuildAndPublishSlow();
-      next_slow_at = HAL_GetTick() + MB_SLOW_MS;
+      if (!Telemetry_HasPendingSlow())
+      {
+        Mb_BuildAndPublishSlow();
+        if (!Telemetry_HasPendingSlow())
+        {
+          s_next_slow_at = HAL_GetTick() + MB_SLOW_MS;
+        }
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -801,6 +813,7 @@ void StartCellular(void const * argument)
 {
   /* USER CODE BEGIN StartCellular */
   uint32_t seq;
+  uint32_t slow_retry_at = 0U;
 
   (void)argument;
 
@@ -824,14 +837,21 @@ void StartCellular(void const * argument)
 
     if (Telemetry_TakeSlow(s_cell_json_buf, sizeof(s_cell_json_buf), &seq))
     {
-      printf("[CELL] slow seq=%lu: %s\r\n", (unsigned long)seq, s_cell_json_buf);
-      if (EC25_PUBLISH(s_cell_json_buf, 1, &huart4))
+      if (slow_retry_at == 0U ||
+          (int32_t)(HAL_GetTick() - slow_retry_at) >= 0)
       {
-        Telemetry_AckSlow(seq);
-      }
-      else
-      {
-        printf("[CELL] slow publish failed seq=%lu\r\n", (unsigned long)seq);
+        printf("[CELL] slow seq=%lu: %s\r\n", (unsigned long)seq, s_cell_json_buf);
+        if (EC25_PUBLISH(s_cell_json_buf, 1, &huart4))
+        {
+          Telemetry_AckSlow(seq);
+          ArmSlowPollAfterSend();
+          slow_retry_at = 0U;
+        }
+        else
+        {
+          printf("[CELL] slow publish failed seq=%lu\r\n", (unsigned long)seq);
+          slow_retry_at = HAL_GetTick() + CELL_SLOW_RETRY_MS;
+        }
       }
     }
 

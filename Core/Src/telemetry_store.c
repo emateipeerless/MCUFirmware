@@ -178,3 +178,33 @@ void Telemetry_AckSlow(uint32_t seq)
     }
     osMutexRelease(s_store.mutex);
 }
+
+bool Telemetry_HasPendingFast(void)
+{
+    bool pending;
+
+    if (s_store.mutex == NULL)
+    {
+        return false;
+    }
+
+    osMutexWait(s_store.mutex, osWaitForever);
+    pending = (s_store.fast_seq > s_store.fast_acked_seq);
+    osMutexRelease(s_store.mutex);
+    return pending;
+}
+
+bool Telemetry_HasPendingSlow(void)
+{
+    bool pending;
+
+    if (s_store.mutex == NULL)
+    {
+        return false;
+    }
+
+    osMutexWait(s_store.mutex, osWaitForever);
+    pending = (s_store.slow_seq > s_store.slow_acked_seq);
+    osMutexRelease(s_store.mutex);
+    return pending;
+}
